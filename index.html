@@ -87,7 +87,9 @@ textarea.inp{resize:vertical;min-height:64px;line-height:1.6}
 .badge-done{background:var(--green-bg);color:var(--green-fg)}
 .word-texts{flex:1;display:flex;flex-direction:column;gap:3px;min-width:0}
 .word-en{font-family:'Playfair Display',serif;font-style:normal;font-size:18px;font-weight:700;color:var(--navy);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;letter-spacing:.5px}
+.word-phonetic{font-size:11px;color:var(--muted);font-style:italic;letter-spacing:.3px;margin-top:1px}
 .word-ja{font-size:13px;color:#555;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.card-phonetic{font-size:13px;color:#9ab0cc;letter-spacing:.5px;margin-top:-6px}
 .word-tag-pill{display:inline-block;border-radius:10px;padding:2px 8px;font-size:10px;font-weight:700;margin-top:1px}
 .word-row-btns{display:flex;gap:4px;flex-shrink:0}
 .icon-btn{background:none;border:none;cursor:pointer;font-size:17px;padding:4px 5px;line-height:1;border-radius:6px;transition:background .15s}
@@ -234,6 +236,10 @@ canvas#historyChart{width:100%!important}
           <input id="input-en" class="inp" type="text" placeholder="英単語" autocomplete="off">
           <input id="input-ja" class="inp" type="text" placeholder="意味" autocomplete="off">
         </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input id="input-phonetic" class="inp" type="text" placeholder="発音記号 ※任意" autocomplete="off" style="flex:1">
+          <button class="btn btn-outline btn-sm" onclick="fetchPhonetic()" style="white-space:nowrap">🔍 自動取得</button>
+        </div>
         <select id="input-word-tag" class="inp" style="color:var(--text)"><option value="">タグなし</option></select>
         <textarea id="input-example-en" class="inp" placeholder="例文（英語）※任意" rows="2"></textarea>
         <textarea id="input-example-ja" class="inp" placeholder="例文（日本語訳）※任意" rows="2"></textarea>
@@ -374,9 +380,11 @@ canvas#historyChart{width:100%!important}
     <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px">
       <textarea id="me-en" class="inp" placeholder="例文（英語）" rows="3"></textarea>
       <textarea id="me-ja" class="inp" placeholder="例文（日本語訳）" rows="2"></textarea>
-      <div style="display:flex;align-items:center;gap:8px">
-        <button class="ai-btn" id="ai-gen-btn" onclick="generateExample()">✨ AIで例文を生成</button>
-        <span class="ai-generating" id="ai-status" style="display:none">生成中…</span>
+      <div style="background:#f5f0ff;border-radius:10px;padding:10px 12px;font-size:12px;color:#5b21b6;line-height:1.7">
+        ✨ <strong>AI例文生成：</strong><br>
+        <span id="ai-claude-hint"></span><br>
+        <a id="ai-claude-link" href="#" target="_blank" style="color:#7c3aed;font-weight:700">→ Claudeで例文を作る</a>
+        （生成後、上のテキストエリアに貼り付けてください）
       </div>
     </div>
     <div class="modal-btns">
@@ -404,9 +412,9 @@ let pendingRows=[], editingExampleId=null;
 
 const DEFAULT_TAGS=[{id:1,name:'TOEIC',colorIdx:0},{id:2,name:'日常会話',colorIdx:2}];
 const DEFAULT_WORDS=[
-  {id:1,en:'serendipity',ja:'思いがけない幸運',mastered:false,tagId:null,exampleEn:'',exampleJa:''},
-  {id:2,en:'ephemeral',  ja:'はかない、一時的な',mastered:false,tagId:1,exampleEn:'The beauty of cherry blossoms is ephemeral.',exampleJa:'桜の美しさははかない。'},
-  {id:3,en:'resilience', ja:'回復力、しなやかさ',mastered:true, tagId:2,exampleEn:'',exampleJa:''},
+  {id:1,en:'serendipity',ja:'思いがけない幸運',phonetic:'/ˌserənˈdɪpɪti/',mastered:false,tagId:null,exampleEn:'',exampleJa:''},
+  {id:2,en:'ephemeral',  ja:'はかない、一時的な',phonetic:'/ɪˈfemərəl/',mastered:false,tagId:1,exampleEn:'The beauty of cherry blossoms is ephemeral.',exampleJa:'桜の美しさははかない。'},
+  {id:3,en:'resilience', ja:'回復力、しなやかさ',phonetic:'/rɪˈzɪliəns/',mastered:true, tagId:2,exampleEn:'',exampleJa:''},
 ];
 
 // ── Storage ──────────────────────────────────
@@ -414,8 +422,10 @@ function load(){
   try{words=JSON.parse(localStorage.getItem(SK_WORDS))||DEFAULT_WORDS;}catch{words=DEFAULT_WORDS;}
   try{tags=JSON.parse(localStorage.getItem(SK_TAGS))||DEFAULT_TAGS;}catch{tags=DEFAULT_TAGS;}
   try{history=JSON.parse(localStorage.getItem(SK_HIST))||{};}catch{history={};}
-  // migrate old words without example fields
-  words.forEach(w=>{if(!('exampleEn' in w)){w.exampleEn='';w.exampleJa='';}});
+  words.forEach(w=>{
+    if(!('exampleEn' in w)){w.exampleEn='';w.exampleJa='';}
+    if(!('phonetic' in w)){w.phonetic='';}
+  });
 }
 function save(){
   localStorage.setItem(SK_WORDS,JSON.stringify(words));
@@ -523,6 +533,7 @@ function renderList(){
         <button class="badge ${w.mastered?'badge-done':'badge-todo'}" onclick="toggleWord(${w.id})">${w.mastered?'✓ 習得':'学習中'}</button>
         <div class="word-texts">
           <span class="word-en">${esc(w.en)}</span>
+          ${w.phonetic?`<span class="word-phonetic">${esc(w.phonetic)}</span>`:''}
           <span class="word-ja">${esc(w.ja)}</span>
           ${pill}
         </div>
@@ -545,14 +556,27 @@ function toggleExample(id){
 function addWord(){
   const en=document.getElementById('input-en').value.trim();
   const ja=document.getElementById('input-ja').value.trim();
+  const phonetic=document.getElementById('input-phonetic').value.trim();
   const tid=document.getElementById('input-word-tag').value;
   const exEn=document.getElementById('input-example-en').value.trim();
   const exJa=document.getElementById('input-example-ja').value.trim();
   if(!en||!ja)return;
-  words.push({id:genId(),en,ja,mastered:false,tagId:tid?Number(tid):null,exampleEn:exEn,exampleJa:exJa});
+  words.push({id:genId(),en,ja,phonetic,mastered:false,tagId:tid?Number(tid):null,exampleEn:exEn,exampleJa:exJa});
   save(); renderList();
-  ['input-en','input-ja','input-example-en','input-example-ja'].forEach(id=>document.getElementById(id).value='');
+  ['input-en','input-ja','input-phonetic','input-example-en','input-example-ja'].forEach(id=>document.getElementById(id).value='');
   document.getElementById('input-en').focus();
+}
+
+async function fetchPhonetic(){
+  const en=document.getElementById('input-en').value.trim();
+  if(!en){toast('先に英単語を入力してください',true);return;}
+  try{
+    const res=await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(en)}`);
+    const data=await res.json();
+    const phonetic=data[0]?.phonetic||data[0]?.phonetics?.find(p=>p.text)?.text||'';
+    if(phonetic){document.getElementById('input-phonetic').value=phonetic;toast('発音記号を取得しました');}
+    else{toast('発音記号が見つかりませんでした',true);}
+  }catch(e){toast('取得に失敗しました',true);}
 }
 function toggleWord(id){
   const w=words.find(x=>x.id===id);if(!w)return;
@@ -574,6 +598,11 @@ function openExampleModal(id){
   document.getElementById('me-title').textContent=`例文を編集 — ${w.en}`;
   document.getElementById('me-en').value=w.exampleEn||'';
   document.getElementById('me-ja').value=w.exampleJa||'';
+  // Claudeリンク設定
+  const prompt=`英単語「${w.en}」（意味：${w.ja}）を使った自然な英語例文を1つ作り、日本語訳も添えてください。`;
+  const encoded=encodeURIComponent(prompt);
+  document.getElementById('ai-claude-hint').textContent=`「${w.en}」の例文をClaudeに作ってもらえます：`;
+  document.getElementById('ai-claude-link').href=`https://claude.ai/new?q=${encoded}`;
   document.getElementById('modal-example').classList.add('open');
 }
 function saveExample(){
@@ -599,6 +628,10 @@ function renderFlash(){
   counter.textContent=`${(flashIdx%flashWords.length)+1} / ${flashWords.length}`;
   document.getElementById('card-hint').textContent=flashFlipped?'意味':'英語';
   document.getElementById('card-word').textContent=flashFlipped?w.ja:w.en;
+  // 発音記号
+  let phonEl=document.getElementById('card-phonetic');
+  if(!phonEl){phonEl=document.createElement('div');phonEl.id='card-phonetic';phonEl.className='card-phonetic';document.getElementById('card-word').after(phonEl);}
+  phonEl.textContent=(!flashFlipped&&w.phonetic)?w.phonetic:'';
   document.getElementById('card-tap').textContent=flashFlipped?'タップで英語を見る':'タップで意味を見る';
   card.classList.toggle('flipped',flashFlipped);
   // Example on flipped
@@ -703,35 +736,6 @@ function answerQuiz(btn, chosen, correct){
   setTimeout(()=>{quizIdx++;quizAnswered=false;renderQuiz();},1100);
 }
 
-// ── AI 例文生成 ──────────────────────────────
-async function generateExample(){
-  const w=words.find(x=>x.id===editingExampleId);if(!w)return;
-  const btn=document.getElementById('ai-gen-btn');
-  const status=document.getElementById('ai-status');
-  btn.disabled=true; status.style.display='inline';
-  try{
-    const res=await fetch('https://api.anthropic.com/v1/messages',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({
-        model:'claude-sonnet-4-20250514',
-        max_tokens:300,
-        messages:[{role:'user',content:
-          `英単語「${w.en}」（意味：${w.ja}）を使った自然な英語例文を1つ作り、日本語訳も添えてください。\n必ずJSON形式のみで返答してください：{"en":"例文","ja":"日本語訳"}`
-        }]
-      })
-    });
-    const data=await res.json();
-    const text=data.content?.find(b=>b.type==='text')?.text||'';
-    const clean=text.replace(/```json|```/g,'').trim();
-    const parsed=JSON.parse(clean);
-    document.getElementById('me-en').value=parsed.en||'';
-    document.getElementById('me-ja').value=parsed.ja||'';
-    toast('✨ 例文を生成しました');
-  }catch(e){toast('生成に失敗しました。やり直してください。',true);}
-  finally{btn.disabled=false;status.style.display='none';}
-}
-
 // ── Import / Export ──────────────────────────
 const fileInput=document.getElementById('file-input');
 const dropZone=document.getElementById('drop-zone');
@@ -792,14 +796,20 @@ function parseRows(rows){
   for(let i=start;i<rows.length;i++){
     const row=rows[i];
     const en=String(row[0]||'').trim();
-    const ja=String(row[1]||'').trim();
+    // 2列目が発音記号かどうか判定（/で始まるか[で始まる場合は発音記号）
+    let phonetic='', jaCol=1, tagCol=2, masteredCol=3, exEnCol=4, exJaCol=5;
+    const col1=String(row[1]||'').trim();
+    if(col1.startsWith('/')||col1.startsWith('[')||col1===''&&String(row[2]||'').trim()){
+      phonetic=col1; jaCol=2; tagCol=3; masteredCol=4; exEnCol=5; exJaCol=6;
+    }
+    const ja=String(row[jaCol]||'').trim();
     if(!en||!ja)continue;
-    const tagName=String(row[2]||'').trim();
-    const masteredRaw=String(row[3]||'').trim().toLowerCase();
+    const tagName=String(row[tagCol]||'').trim();
+    const masteredRaw=String(row[masteredCol]||'').trim().toLowerCase();
     const mastered=['習得','習得済','mastered','done','1','true'].includes(masteredRaw);
-    const exEn=String(row[4]||'').trim();
-    const exJa=String(row[5]||'').trim();
-    imported.push({en,ja,tagName,mastered,exEn,exJa});
+    const exEn=String(row[exEnCol]||'').trim();
+    const exJa=String(row[exJaCol]||'').trim();
+    imported.push({en,ja,phonetic,tagName,mastered,exEn,exJa});
   }
   if(!imported.length){toast('有効なデータが見つかりませんでした',true);return;}
   const dupes=imported.filter(r=>words.find(w=>w.en.toLowerCase()===r.en.toLowerCase()));
@@ -819,7 +829,7 @@ function executeImport(){
   pendingRows.forEach(r=>{
     if(words.find(w=>w.en.toLowerCase()===r.en.toLowerCase()))return;
     const tagId=r.tagName?findOrCreateTag(r.tagName):null;
-    words.push({id:genId(),en:r.en,ja:r.ja,mastered:r.mastered,tagId,exampleEn:r.exEn,exampleJa:r.exJa});
+    words.push({id:genId(),en:r.en,ja:r.ja,phonetic:r.phonetic||'',mastered:r.mastered,tagId,exampleEn:r.exEn,exampleJa:r.exJa});
     added++;
   });
   save();renderTags();renderList();renderFlashTagFilter();
@@ -829,10 +839,10 @@ function executeImport(){
 
 function buildExportRows(){
   return [
-    ['英語','意味','タグ','習熟度','例文(英語)','例文(日本語訳)'],
+    ['英語','発音記号','意味','タグ','習熟度','例文(英語)','例文(日本語訳)'],
     ...words.map(w=>{
       const t=tagById(w.tagId);
-      return [w.en,w.ja,t?t.name:'',w.mastered?'習得済':'学習中',w.exampleEn||'',w.exampleJa||''];
+      return [w.en,w.phonetic||'',w.ja,t?t.name:'',w.mastered?'習得済':'学習中',w.exampleEn||'',w.exampleJa||''];
     })
   ];
 }
